@@ -20,6 +20,13 @@ This component implements a DALI master that can talk to devices on a DALI bus.
 
 ## Usage:
 
+At first, load the [external component](https://esphome.io/components/external_components/#external-components) from github:
+```yaml
+external_components:
+  - source: github://jorticus/esphome-dali@master
+    components: [dali]
+```
+
 Lights can be automatically discovered on the bus by simply defining a dali bus component:
 
 ```yaml
