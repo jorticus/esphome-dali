@@ -176,6 +176,7 @@ void DaliBusComponent::setup() {
 }
 
 void DaliBusComponent::create_light_component(short_addr_t short_addr, uint32_t long_addr) {
+#ifdef USE_LIGHT
     DaliLight* dali_light = new DaliLight { this };
     dali_light->set_address(short_addr);
 
@@ -197,6 +198,10 @@ void DaliBusComponent::create_light_component(short_addr_t short_addr, uint32_t 
     light_state->add_effects({});
 
     DALI_LOGI("Created light component '%s' (%s)", name, id);
+#else
+    // Make sure you set discovery: true, or specify a light component somewhere in your YAML!
+    DALI_LOGE("Cannot add light component - not enabled");
+#endif
 }
 
 void DaliBusComponent::loop() {
