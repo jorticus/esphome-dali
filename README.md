@@ -138,6 +138,16 @@ It has been noted elsewhere that if using a LM317, it MUST be an on-brand chip, 
 
 I will later be releasing a Kicad project for a DALI bus adapter board that more closely follows the spec.
 
+## Hardware Adapters
+
+WaveShare sells a cheap DALI board for use with their ESP32-S3-Pico devboard, and is probably the easiest way to get up and going with this component:
+
+https://www.waveshare.com/pico-dali2.htm
+
+https://www.waveshare.com/wiki/Pico-DALI2
+
+Let me know if you have success with this! I am using a custom design that is more or less the same as this, but also injects power onto the bus.
+
 ## Device Support
 
 The following devices have been tested with this library:
