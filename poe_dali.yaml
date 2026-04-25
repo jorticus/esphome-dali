@@ -4,15 +4,16 @@
 # NOTE: Only IDF v4 / Arduino 2.0 support the RTL PHY. See:
 # https://github.com/esphome/feature-requests/issues/1462
 #
-
-substitutions:
-  device_name: dali_master
-  device_description: PoE DALI Master
+# Tested with ESPHome 2025.2.2
 
 # https://esphome.io/components/esphome.html
 esphome:
-  name: ${device_name}
-  comment: ${device_description}
+  name: dali_master
+  friendly_name: DALI Master
+  project:
+    name: 'jorticus.dali_master'
+    version: 1.0.0
+
   name_add_mac_suffix: true
 
 esp32:
@@ -27,6 +28,8 @@ ethernet:
   clk_mode: GPIO0_OUT
   phy_addr: 0
 
+  use_address: 192.168.101.73
+
 external_components:
   - source: 
       type: local
@@ -35,8 +38,8 @@ external_components:
 # Enable Home Assistant API
 api:
 
-web_server:
-  port: 80
+#web_server:
+#  port: 80
 
 ota:
   - platform: esphome
@@ -44,29 +47,26 @@ ota:
 
 logger:
 
-light:
-- platform: dali
-  id: dali_light_broadcast
-  name: "DALI Light (All)"
-  restore_mode: RESTORE_DEFAULT_ON 
+# light:
+# - platform: dali
+#   id: dali_light_broadcast
+#   name: "DALI Light (All)"
+#   restore_mode: RESTORE_DEFAULT_ON 
 
-  # For UI display purposes only, match this with physical properties of the strip
-  cold_white_color_temperature: 4000K
-  warm_white_color_temperature: 2700K
+#   # For UI display purposes only, match this with physical properties of the strip
+#   cold_white_color_temperature: 4000K
+#   warm_white_color_temperature: 2700K
 
-  # Set the brightness curve on the device
-  #brightness_curve: LOGARITHMIC # (default)
+#   # Set the brightness curve on the device
+#   #brightness_curve: LOGARITHMIC # (default)
 
-  # Force a specific color mode, irrespective of what the device claims.
-  # NOTE: ESPHome doesn't support XY coords
-  color_mode: COLOR_TEMPERATURE # (default: auto detect)
+#   # Force a specific color mode, irrespective of what the device claims.
+#   # NOTE: ESPHome doesn't support XY coords
+#   color_mode: ON_OFF # (default: auto detect)
 
-  # Update the fade time/rate on the device
-  #fade_time: 1s  # ['500ms', '707ms', '1.0s', '1.4s', '2.0s', '2.8s', '4.0s', '5.7s', '8.0s', '11.3s', '16.0s', '22.6s', '32.0s', '45.3s', '1.1m', '1.5m']
-  #fade_rate: 7   # [357796, 253000, 178898, 126500, 89449, 63250, 44724, 31625, 22362, 15812, 11181, 7906, 5590, 3953, 2795]
-
-
-output:
+#   # Update the fade time/rate on the device
+#   #fade_time: 1s  # ['500ms', '707ms', '1.0s', '1.4s', '2.0s', '2.8s', '4.0s', '5.7s', '8.0s', '11.3s', '16.0s', '22.6s', '32.0s', '45.3s', '1.1m', '1.5m']
+#   #fade_rate: 7   # [357796, 253000, 178898, 126500, 89449, 63250, 44724, 31625, 22362, 15812, 11181, 7906, 5590, 3953, 2795]
 
 
 dali:
