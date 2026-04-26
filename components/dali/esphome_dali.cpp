@@ -2,12 +2,33 @@
 #include <esp_task_wdt.h>
 #include "esphome_dali.h"
 #include "esphome_dali_light.h"
+#include "port.h"
 
 //static const char *const TAG = "dali";
 static const bool DEBUG_LOG_RXTX = false; // NOTE: Will probably trigger WDT
 
 using namespace esphome;
 using namespace dali;
+
+namespace {
+
+class AppRegistrationAccessor : public esphome::Application {
+public:
+    using Application::register_component_;
+};
+
+class DynamicDaliLightState : public esphome::light::LightState {
+public:
+    using esphome::light::LightState::LightState;
+
+    void configure_dynamic_entity(const char* name, const char* object_id, bool disabled_by_default) {
+        uint32_t entity_fields = (static_cast<uint32_t>(disabled_by_default) << esphome::ENTITY_FIELD_DISABLED_BY_DEFAULT_SHIFT);
+        this->configure_entity_(name, esphome::fnv1_hash_object_id(object_id, std::strlen(object_id)), entity_fields);
+    }
+};
+
+}  // namespace
+
 
 void DaliBusComponent::setup() {
     m_txPin->pin_mode(gpio::Flags::FLAG_OUTPUT);
@@ -25,14 +46,9 @@ void DaliBusComponent::setup() {
         if (dali.bus_manager.isControlGearPresent()) {
             DALI_LOGD("Detected control gear on bus");
         } else {
-            DALI_LOGW("No control gear detected on bus!");
+            DALI_LOGE("No DALI control gear detected on bus!");
+            return; // Unlikely to get anything from discovery if no one responds to this
         }
-
-        // for (int i = 0; i <= ADDR_SHORT_MAX; i++) {
-        //     if (m_addresses[i] != 0) {
-        //         DALI_LOGD("Static config addr: %.2x", i);
-        //     }
-        // }
 
         if (this->m_initialize_addresses != DaliInitMode::DiscoverOnly) {
             if (this->m_initialize_addresses == DaliInitMode::InitializeAll) {
@@ -69,41 +85,6 @@ void DaliBusComponent::setup() {
             count++;
             delay(1); // yield to ESP stack
             esp_task_wdt_reset();
-
-            // if (short_addr == 0xFF) {
-            //     if (this->m_initialize_addresses) {
-                    
-            //         //dali.bus_manager.programShortAddress(count);
-            //         // short_addr_t new_addr = 1;
-            //         // programShortAddress(new_addr);
-            
-            //         // port.sendSpecialCommand(DaliSpecialCommand::QUERY_SHORT_ADDRESS, 0);
-            //         // out_short_addr = port.receiveBackwardFrame();
-            
-            //         // if (out_short_addr != new_addr) {
-            //         //     DALI_LOGE("Could not program short address");
-            //         //     out_short_addr = 0xFF;
-            //         // }
-
-            //         short_addr_t new_addr = count;
-
-            //         dali.bus_manager.programShortAddress(new_addr);
-
-            //         dali.port.sendSpecialCommand(DaliSpecialCommand::QUERY_SHORT_ADDRESS, 0);
-            //         short_addr = dali.port.receiveBackwardFrame();
-            
-            //         if (short_addr != new_addr) {
-            //             DALI_LOGE("  Could not program short address");
-            //             continue;
-            //         }
-            //     }
-            //     else {
-            //         // You'll need to assign a short address before the device will respond to commands.
-            //         // However it will still respond to BROADCAST brightness updates...
-            //         DALI_LOGW("  No short address assigned!");
-            //         continue;
-            //     }
-            // }
 
             if (short_addr <= ADDR_SHORT_MAX) {
                 DALI_LOGI("  Device %.6x @ %.2x", long_addr, short_addr);
@@ -187,13 +168,12 @@ void DaliBusComponent::create_light_component(short_addr_t short_addr, uint32_t 
     snprintf(id, MAX_STR_LEN, "dali_light_%.6x", long_addr);
     // NOTE: Not freeing these strings, they will be owned by LightState.
 
-    auto* light_state = new light::LightState { dali_light };
-    light_state->set_component_source("light");
+    auto* light_state = new DynamicDaliLightState { dali_light };
+    light_state->set_component_source(LOG_STR("light"));
+    light_state->configure_dynamic_entity(name, id, false);
     App.register_light(light_state);
-    App.register_component(light_state);
-    light_state->set_name(name);
-    light_state->set_object_id(id);
-    light_state->set_disabled_by_default(false);
+    static_cast<AppRegistrationAccessor&>(App).register_component_(light_state);
+
     light_state->set_restore_mode(light::LIGHT_RESTORE_DEFAULT_ON);
     light_state->add_effects({});
 

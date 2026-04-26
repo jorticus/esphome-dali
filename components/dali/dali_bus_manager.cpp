@@ -1,9 +1,7 @@
 #include "dali.h"
-#include <Arduino.h>
+#include "port.h"
 
-/// @brief Automatically assign sequential short addresses to all devices on the DALI bus
-/// @param assign ASSIGN_ALL, ASSIGN_UNINITIALIZED, or the short address for a specific device
-/// @return The number of devices found on the bus
+
 uint8_t DaliBusManager::autoAssignShortAddresses(uint8_t assign, bool reset) {
     if (reset) {
         DALI_LOGI("BEGIN AUTO ADDRESS ASSIGNMENT");
@@ -11,111 +9,69 @@ uint8_t DaliBusManager::autoAssignShortAddresses(uint8_t assign, bool reset) {
         DALI_LOGI("BEGIN AUTO ADDRESS QUERY");
     }
 
-    // for (int i = 0; i < 64; i++) {
-    //     m_addresses[i] = 0;
-    // }
-
-    // Put all devices on the bus into initialization mode, where they will accept special commands
+    // Put matching devices into initialization mode
     initialize(assign);
 
-    // Tell all devices to randomize their addresses
+    // If requested, randomize addresses before scanning
     if (reset) {
         DALI_LOGI("Randomizing addresses");
         randomize();
-        delay(1000);
+        delayMilliseconds(1000);
     }
 
-    // Binary search through address space to find lowest address
+    // Prepare for scanning without forcing a different initialize(assign) call
+    this->_is_scanning = true;
+
     uint8_t count = 0;
-    while (true) {
-        uint32_t addr = 0x000000; // Start with the lowest address
+    short_addr_t found_short;
+    uint32_t found_long;
 
-        //NOTE: This doesn't work with one of my controllers!!
-        // // Shortcut: test if we are done
-        // if (!compareSearchAddress(0xFFFFFF)) {
-        //     Serial.println("No more devices found");
-        //     break;
-        // }
+    while (findNextAddress(found_short, found_long)) {
+        DALI_LOGD("Found long address: 0x%.6x", found_long);
 
-        for (uint32_t i = 0; i < 24; i++) {
-            uint32_t bit = 1ul << (uint32_t)(23ul - i);
-            uint32_t search_addr = addr | bit;
-            // Serial.print("Searching for addr 0x");
-            // Serial.println(search_addr, HEX);
+        uint8_t program_short = (count << 1); // short address with command bit cleared
+        uint8_t verify_short = 0xFF;
 
-            // True if actual address <= search_address
-            bool compare_result = compareSearchAddress(search_addr);
-            if (compare_result) {
-                addr &= ~bit; // Clear the bit (already clear)
+        if (reset) {
+            // Program sequential short address (LSB is command bit, so keep it clear here)
+            port.sendSpecialCommand(DaliSpecialCommand::PROGRAM_SHORT_ADDRESS, program_short | DALI_COMMAND);
+            verify_short = program_short;
+        } else {
+            // Use any reported short address from device if available
+            if (found_short != 0xFF) {
+                verify_short = static_cast<uint8_t>(found_short << 1);
             } else {
-                addr |= bit;  // Set the bit
+                DALI_LOGW("Device 0x%.6x has no short address", found_long);
+                verify_short = 0xFF;
             }
         }
 
-        if (addr == 0xFFFFFF) {
-            break; // No more devices found
-        }
-
-        // Need to increment by one to get the actual address
-        addr++;
-
-        DALI_LOGD("Found address: 0x%.6x", addr);
-
-        // Sanity check: Address should still return true for comparison
-        if (!compareSearchAddress(addr)) {
-            DALI_LOGE("Address did not match?");
-            delay(5000);
-            continue;
-        }
-
-        // Remove this device from the search
-        withdraw(addr);
-
-        // Sanity check: Address should no longer respond to comparison
-        if (compareSearchAddress(addr)) {
-            DALI_LOGE("Device did not withdraw");
-            delay(5000);
-            continue;
-        }
-
-
-        uint8_t short_addr = (count << 1);
-
-        if (reset) {
-            // Program short address
-            // NOTE: an address of 0xFF will delete the short address
-            port.sendSpecialCommand(
-                DaliSpecialCommand::PROGRAM_SHORT_ADDRESS, 
-                short_addr | DALI_COMMAND);
-        }
-
-        // Verify
-        port.sendSpecialCommand(DaliSpecialCommand::VERIFY_SHORT_ADDRESS, short_addr | DALI_COMMAND);
-        if (port.receiveBackwardFrame() == 0xFF) {
-            DALI_LOGD("Short address: %.2x", short_addr);
-
-            //m_addresses[count] = addr;
+        // Verify short address if we have one to verify
+        if (verify_short != 0xFF) {
+            port.sendSpecialCommand(DaliSpecialCommand::VERIFY_SHORT_ADDRESS, verify_short | DALI_COMMAND);
+            if (port.receiveBackwardFrame() == 0xFF) {
+                DALI_LOGD("Short address verified: %.2x", verify_short);
+            } else {
+                DALI_LOGE("Short address verification failed for 0x%.6x", found_long);
+                delayMilliseconds(1000);
+            }
         } else {
-            DALI_LOGE("Short address verification failed!");
-            delay(1000);
+            DALI_LOGW("Skipping verification for 0x%.6x (no short address)", found_long);
         }
 
         count++;
     }
 
+    // End scanning and exit initialization mode
+    this->_is_scanning = false;
+    terminate();
+
     if (count == 0) {
         DALI_LOGE("No devices found");
     }
 
-    // Exit initialization mode
-    // Devices will respond to regular commands again
-    terminate();
-
-    //m_device_count = count;
-
     return count;
 }
-
 
 void DaliBusManager::startAddressScan() {
     if (!this->_is_scanning) {
@@ -153,7 +109,7 @@ bool DaliBusManager::findNextAddress(short_addr_t& out_short_addr, uint32_t& out
         }
     }
 
-    if (addr == 0xFFFFFF) {
+    if (addr == 0xFFFFFF || addr == 0x000000) {
         return false; // No more devices found
     }
 
@@ -197,132 +153,75 @@ void DaliBusManager::endAddressScan() {
     }
 }
 
-#if 0
-/// @brief 
-/// @return The number of devices found on the bus
-uint8_t DaliBusManager::scanAddresses(std::vector<uint32_t>& addresses) {
-    uint8_t count = 0;
-
-    const int MAX_SHORT_ADDRESS = 64;
-    uint32_t m_addresses[MAX_SHORT_ADDRESS];
-    for (int i = 0; i < MAX_SHORT_ADDRESS; i++) {
-        m_addresses[i] = 0;
-    }
-
-    // TODO: Scanning entire space causes watchdog
-    // [I][dali:136]: DALI[00] = 0x6721a8
-    // E (11344) task_wdt: Task watchdog got triggered. The following tasks did not reset the watchdog in time:
-    // E (11344) task_wdt:  - loopTask (CPU 1)
-    // E (11344) task_wdt: Tasks currently running:
-    // E (11344) task_wdt: CPU 0: IDLE
-    // E (11344) task_wdt: CPU 1: loopTask
-    // E (11344) task_wdt: Aborting.
-    // abort() was called at PC 0x400f2808 on core 0
-    for (int i = 0; i < 4; i++) {
-        yield();
-        // TODO: reset WDT??
-        if (isControlGearPresent(i)) {
-            uint32_t addr = queryAddress(i);
-            DALI_LOGI("DALI[%.2x] = 0x%.6x", i, addr);
-            //count++;
-        }
-    }
-
-    DALI_LOGI("Beginning full device scan...");
-
-
-
-    // Binary search through address space to find lowest address
-    // TODO: When two devices are connected, I am only seeing one.
-    // Maybe the test for withdraw isn't right?
-    
-    while (true) {
-        yield();
-        getNextAddress(...);
- 
-        count++;
-    }
-
-    //m_device_count = count;
-
-    DALI_LOGI("Scanning complete. %d devices found", count);
-
-    return count;
-}
-#endif
-
 void DaliMaster::dumpStatusForDevice(uint8_t addr) {
-    Serial.println();
-    Serial.print("Device["); Serial.print(addr); Serial.println("]"); // Serial.print("] : 0x"); Serial.println(m_addresses[addr], HEX);
+    DALI_LOGI("");
+    DALI_LOGI("Device[%u]", addr); // Serial.print("] : 0x"); Serial.println(m_addresses[addr], HEX);
     bool present = port.sendQueryCommand(addr, DaliCommand::QUERY_CONTROL_GEAR_PRESENT);
-    Serial.print("  Present:      "); Serial.println(present ? "YES" : "NO");
+    DALI_LOGI("  Present:      %s", present ? "YES" : "NO");
 
     if (!present) {
         return;
     }
 
-    Serial.print("  Version:      "); Serial.println(port.sendQueryCommand(addr, DaliCommand::QUERY_VERSION_NUMBER), HEX);
+    DALI_LOGI("  Version:      %02X", port.sendQueryCommand(addr, DaliCommand::QUERY_VERSION_NUMBER));
     //Serial.print("  Device Type:  "); Serial.println(port.sendQueryCommand(addr, CMD_QUERY_DEVICE_TYPE), HEX); FF -> ALL?
 
-    Serial.print("  Status:       "); //Serial.println(port.sendQueryCommand(addr, CMD_QUERY_STATUS), HEX);
-        uint8_t status = port.sendQueryCommand(addr, DaliCommand::QUERY_STATUS);
-        Serial.println(status, HEX);
+    uint8_t status = port.sendQueryCommand(addr, DaliCommand::QUERY_STATUS);
+    DALI_LOGI("  Status:       %02X", status); //Serial.println(port.sendQueryCommand(addr, CMD_QUERY_STATUS), HEX);
         //if (status & STATUS_BALLAST_OK)             { Serial.println("    Ballast Not OK"); }
-        if (status & STATUS_LAMP_FAILURE)           { Serial.println("    Lamp Failure"); }
-        if (status & STATUS_LAMP_ON)                { Serial.println("    Lamp On"); } else { Serial.println("    Lamp Off"); }
-        if (status & STATUS_LIMIT_ERROR)            { Serial.println("    Limit Error"); }
-        if (status & STATUS_FADE_STATE)             { Serial.println("    Fading"); }
+        if (status & STATUS_LAMP_FAILURE)           { DALI_LOGI("    Lamp Failure"); }
+        if (status & STATUS_LAMP_ON)                { DALI_LOGI("    Lamp On"); } else { DALI_LOGI("    Lamp Off"); }
+        if (status & STATUS_LIMIT_ERROR)            { DALI_LOGI("    Limit Error"); }
+        if (status & STATUS_FADE_STATE)             { DALI_LOGI("    Fading"); }
         //if (status & STATUS_RESET_STATE)            { Serial.println("    Reset State"); }
-        if (status & STATUS_MISSING_SHORT_ADDRESS)  { Serial.println("    Missing Short Address"); }
+        if (status & STATUS_MISSING_SHORT_ADDRESS)  { DALI_LOGI("    Missing Short Address"); }
         //if (status & STATUS_POWER_FAILURE)          { Serial.println("    Power Failure"); }
 
-    Serial.print("  Op Mode:      "); Serial.println(port.sendQueryCommand(addr, DaliCommand::QUERY_OPERATING_MODE), HEX);
-    
-    Serial.print("  Lamp Failure: "); Serial.println(port.sendQueryCommand(addr, DaliCommand::QUERY_LAMP_FAILURE), HEX);
-    Serial.print("  Lamp Power:   "); Serial.println(port.sendQueryCommand(addr, DaliCommand::QUERY_LAMP_POWER_ON) ? "ON" : "OFF");
+    DALI_LOGI("  Op Mode:      %02X", port.sendQueryCommand(addr, DaliCommand::QUERY_OPERATING_MODE));
 
-    Serial.print("  Light Type:   "); //Serial.println(port.sendQueryCommand(addr, CMD_QUERY_LIGHT_SOURCE_TYPE), HEX);
-        auto device_type = static_cast<DaliDeviceType>(port.sendQueryCommand(addr, DaliCommand::QUERY_LIGHT_SOURCE_TYPE));
+    DALI_LOGI("  Lamp Failure: %02X", port.sendQueryCommand(addr, DaliCommand::QUERY_LAMP_FAILURE));
+    DALI_LOGI("  Lamp Power:   %s", port.sendQueryCommand(addr, DaliCommand::QUERY_LAMP_POWER_ON) ? "ON" : "OFF");
+
+    auto device_type = static_cast<DaliDeviceType>(port.sendQueryCommand(addr, DaliCommand::QUERY_LIGHT_SOURCE_TYPE));
+    DALI_LOGI("  Light Type:   "); //Serial.println(port.sendQueryCommand(addr, CMD_QUERY_LIGHT_SOURCE_TYPE), HEX);
         switch (device_type) {
-            case DaliDeviceType::FLUORESCENT: Serial.println("Fluorescent"); break;
-            case DaliDeviceType::EMERGENCY:    Serial.println("Emergency"); break;
-            case DaliDeviceType::HID:          Serial.println("HID"); break;
-            case DaliDeviceType::LV_HALOGEN:   Serial.println("Halogen"); break;
-            case DaliDeviceType::INCANDESCENT: Serial.println("Incandescent"); break;
-            case DaliDeviceType::DIGITAL:      Serial.println("Digital"); break;
-            case DaliDeviceType::LED:          Serial.println("LED"); break;
-            case DaliDeviceType::COLOR:        Serial.println("Colour"); break;
-            default: Serial.println(static_cast<uint8_t>(device_type), HEX); break;
+            case DaliDeviceType::FLUORESCENT: DALI_LOGI("Fluorescent"); break;
+            case DaliDeviceType::EMERGENCY:    DALI_LOGI("Emergency"); break;
+            case DaliDeviceType::HID:          DALI_LOGI("HID"); break;
+            case DaliDeviceType::LV_HALOGEN:   DALI_LOGI("Halogen"); break;
+            case DaliDeviceType::INCANDESCENT: DALI_LOGI("Incandescent"); break;
+            case DaliDeviceType::DIGITAL:      DALI_LOGI("Digital"); break;
+            case DaliDeviceType::LED:          DALI_LOGI("LED"); break;
+            case DaliDeviceType::COLOR:        DALI_LOGI("Colour"); break;
+            default: DALI_LOGI("%02X", static_cast<uint8_t>(device_type)); break;
         }
 
         if (device_type == DaliDeviceType::LED) {
-            Serial.print("    Extended Ver:   "); Serial.println(port.sendExtendedQuery(addr, DaliLedCommand::QUERY_EXTENDED_VERSION_NUMBER), HEX);
-            Serial.print("    Features:       "); Serial.println(port.sendExtendedQuery(addr, DaliLedCommand::QUERY_FEATURES), HEX);
-            Serial.print("    Dimming Curve:  "); Serial.println(port.sendExtendedQuery(addr, DaliLedCommand::QUERY_DIMMING_CURVE), HEX);
-            Serial.print("    Type:           "); Serial.println(port.sendExtendedQuery(addr, DaliLedCommand::QUERY_GEAR_TYPE), HEX);
-            Serial.print("    Failure:        "); Serial.println(port.sendExtendedQuery(addr, DaliLedCommand::QUERY_FAILURE_STATUS), HEX);
-            Serial.print("    Operating Mode: "); Serial.println(port.sendExtendedQuery(addr, DaliLedCommand::QUERY_OPERATING_MODE), HEX);
-            Serial.print("    Fast Fade Time: "); Serial.println(port.sendExtendedQuery(addr, DaliLedCommand::QUERY_FAST_FADE_TIME), HEX);
+            DALI_LOGI("    Extended Ver:   %02X", port.sendExtendedQuery(addr, DaliLedCommand::QUERY_EXTENDED_VERSION_NUMBER));
+            DALI_LOGI("    Features:       %02X", port.sendExtendedQuery(addr, DaliLedCommand::QUERY_FEATURES));
+            DALI_LOGI("    Dimming Curve:  %02X", port.sendExtendedQuery(addr, DaliLedCommand::QUERY_DIMMING_CURVE));
+            DALI_LOGI("    Type:           %02X", port.sendExtendedQuery(addr, DaliLedCommand::QUERY_GEAR_TYPE));
+            DALI_LOGI("    Failure:        %02X", port.sendExtendedQuery(addr, DaliLedCommand::QUERY_FAILURE_STATUS));
+            DALI_LOGI("    Operating Mode: %02X", port.sendExtendedQuery(addr, DaliLedCommand::QUERY_OPERATING_MODE));
+            DALI_LOGI("    Fast Fade Time: %02X", port.sendExtendedQuery(addr, DaliLedCommand::QUERY_FAST_FADE_TIME));
 
             uint8_t color_ver = port.sendExtendedQuery(addr, DaliColorCommand::QUERY_EXTENDED_VERSION_NUMBER);
             if (color_ver > 0) {
-                Serial.println("    -- Colour --");
-                Serial.print("    Extended Ver:   "); Serial.println(color_ver, HEX);
+                DALI_LOGI("    -- Colour --");
+                DALI_LOGI("    Extended Ver:   %02X", color_ver);
                 uint8_t features = port.sendExtendedQuery(addr,DaliColorCommand::QUERY_COLOR_FEATURES);
-                Serial.print("    Features:       "); Serial.println(features, HEX);
-                    if (features & COLOR_FEATURE_XY_CAPABLE) { Serial.println("      XY Capable"); }
-                    if (features & COLOR_FEATURE_TC_CAPABLE) { Serial.println("      TC Capable"); }
-                Serial.print("    Status:         "); Serial.println(port.sendExtendedQuery(addr, DaliColorCommand::QUERY_COLOR_STATUS), HEX);
-                
+                DALI_LOGI("    Features:       %02X", features);
+                    if (features & COLOR_FEATURE_XY_CAPABLE) { DALI_LOGI("      XY Capable"); }
+                    if (features & COLOR_FEATURE_TC_CAPABLE) { DALI_LOGI("      TC Capable"); }
+                DALI_LOGI("    Status:         %02X", port.sendExtendedQuery(addr, DaliColorCommand::QUERY_COLOR_STATUS));
+
             }
         }
 
-    Serial.print("  Actual Level: "); Serial.println(port.sendQueryCommand(addr, DaliCommand::QUERY_ACTUAL_LEVEL), HEX);
-    Serial.print("  Max Level:    "); Serial.println(port.sendQueryCommand(addr, DaliCommand::QUERY_MAX_LEVEL), HEX);
-    Serial.print("  Min Level:    "); Serial.println(port.sendQueryCommand(addr, DaliCommand::QUERY_MIN_LEVEL), HEX);
-    Serial.print("  Power On Lvl: "); Serial.println(port.sendQueryCommand(addr, DaliCommand::QUERY_POWER_ON_LEVEL), HEX);
+    DALI_LOGI("  Actual Level: %02X", port.sendQueryCommand(addr, DaliCommand::QUERY_ACTUAL_LEVEL));
+    DALI_LOGI("  Max Level:    %02X", port.sendQueryCommand(addr, DaliCommand::QUERY_MAX_LEVEL));
+    DALI_LOGI("  Min Level:    %02X", port.sendQueryCommand(addr, DaliCommand::QUERY_MIN_LEVEL));
+    DALI_LOGI("  Power On Lvl: %02X", port.sendQueryCommand(addr, DaliCommand::QUERY_POWER_ON_LEVEL));
 
-    Serial.print("  Fade Time/Rate: "); Serial.println(port.sendQueryCommand(addr, DaliCommand::QUERY_FADE_TIME_FADE_RATE), HEX);
-
-
+    DALI_LOGI("  Fade Time/Rate: %02X", port.sendQueryCommand(addr, DaliCommand::QUERY_FADE_TIME_FADE_RATE));
 }

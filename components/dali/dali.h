@@ -10,21 +10,20 @@ static const char *const TAG_DALI = "dali";
 #define DALI_LOGI(...) ESP_LOGI(TAG_DALI, __VA_ARGS__)
 #define DALI_LOGW(...) ESP_LOGW(TAG_DALI, __VA_ARGS__)
 #define DALI_LOGE(...) ESP_LOGE(TAG_DALI, __VA_ARGS__)
-#elif defined(ARDUINO)
-// TODO: fmt strings
-#include <Arduino.h>
-static void ard_log(const char *format, ...) {
+#elif defined(DALI_ENABLE_STDIO_LOGGING)
+#include <stdarg.h>
+#include <stdio.h>
+static inline void dali_stdio_log(const char *format, ...) {
     va_list args;
     va_start(args, format);
-    char buf[64];
-    vsnprintf(buf, sizeof(buf), format, args);
-    Serial.println(buf);
+    vprintf(format, args);
+    printf("\n");
     va_end(args);
 }
-#define DALI_LOGD(...) ard_log(__VA_ARGS__)
-#define DALI_LOGI(...) ard_log(__VA_ARGS__)
-#define DALI_LOGW(...) ard_log(__VA_ARGS__)
-#define DALI_LOGE(...) ard_log(__VA_ARGS__)
+#define DALI_LOGD(...) dali_stdio_log(__VA_ARGS__)
+#define DALI_LOGI(...) dali_stdio_log(__VA_ARGS__)
+#define DALI_LOGW(...) dali_stdio_log(__VA_ARGS__)
+#define DALI_LOGE(...) dali_stdio_log(__VA_ARGS__)
 #else
 #define DALI_LOGD(...)
 #define DALI_LOGI(...)
@@ -338,28 +337,6 @@ public:
         return sendQueryCommand(addr, DaliCommand::QUERY_CONTENT_DTR0);
     }
 };
-
-#if defined(ARDUINO)
-/// @brief Bit-banged implementation of a DALI bus
-class DaliSerialBitBangPort : public DaliPort {
-public:
-    DaliSerialBitBangPort(int txPin, int rxPin)
-        : m_txPin(txPin), m_rxPin(rxPin)
-    { }
-
-protected:
-    void sendForwardFrame(uint8_t address, uint8_t data) override;
-    uint8_t receiveBackwardFrame(unsigned long timeout_ms = 100) override;
-
-private:
-    void writeBit(bool bit);
-    void writeByte(uint8_t b);
-    uint8_t readByte();
-
-    int m_txPin;
-    int m_rxPin;
-};
-#endif
 
 /// @brief Bus manager for handling bus addresses
 class DaliBusManager {

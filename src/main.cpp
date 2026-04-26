@@ -8,6 +8,29 @@
 #define DALI_RX_PIN 14
 
 
+#if defined(ARDUINO)
+/// @brief Bit-banged implementation of a DALI bus
+class DaliSerialBitBangPort : public DaliPort {
+public:
+    DaliSerialBitBangPort(int txPin, int rxPin)
+        : m_txPin(txPin), m_rxPin(rxPin)
+    { }
+
+protected:
+    void sendForwardFrame(uint8_t address, uint8_t data) override;
+    uint8_t receiveBackwardFrame(unsigned long timeout_ms = 100) override;
+
+private:
+    void writeBit(bool bit);
+    void writeByte(uint8_t b);
+    uint8_t readByte();
+
+    int m_txPin;
+    int m_rxPin;
+};
+#endif
+
+
 DaliSerialBitBangPort dali_serial { DALI_TX_PIN, DALI_RX_PIN };
 DaliMaster dali { dali_serial };
 
