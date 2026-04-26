@@ -1,6 +1,7 @@
 #pragma once
 
 #include <esphome.h>
+#include <vector>
 #include "dali.h"
 
 namespace esphome {
@@ -67,6 +68,10 @@ private:
     bool m_discovery = false;
     DaliInitMode m_initialize_addresses = DaliInitMode::DiscoverOnly;
     uint32_t m_addresses[ADDR_SHORT_MAX+1] = {0};
+
+    // Dynamic lights created during discovery are not in ESPHome's looping_components_
+    // (that list is fixed at compile time). We drive their loop() manually.
+    std::vector<light::LightState*> m_dynamic_lights;
 };
 
 }  // namespace dali

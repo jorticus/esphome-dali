@@ -29,7 +29,6 @@ public:
 
 }  // namespace
 
-
 void DaliBusComponent::setup() {
     m_txPin->pin_mode(gpio::Flags::FLAG_OUTPUT);
     m_rxPin->pin_mode(gpio::Flags::FLAG_INPUT);
@@ -177,15 +176,24 @@ void DaliBusComponent::create_light_component(short_addr_t short_addr, uint32_t 
     light_state->set_restore_mode(light::LIGHT_RESTORE_DEFAULT_ON);
     light_state->add_effects({});
 
+    // Initialize the DaliLight with the LightState:
+    // queries device capabilities (min/max level, color temperature support)
+    dali_light->setup_state(light_state);
+
+    // Track for manual loop() driving — dynamic lights are not in ESPHome's
+    // compile-time looping_components_ list so their loop() won't be called automatically.
+    m_dynamic_lights.push_back(light_state);
+
     DALI_LOGI("Created light component '%s' (%s)", name, id);
 #else
-    // Make sure you set discovery: true, or specify a light component somewhere in your YAML!
-    DALI_LOGE("Cannot add light component - not enabled");
+    DALI_LOGE("Not compiled with light component. Add `light:` to YAML.");
 #endif
 }
 
 void DaliBusComponent::loop() {
-
+    for (auto* light : m_dynamic_lights) {
+        light->loop();
+    }
 }
 
 void DaliBusComponent::dump_config() {
@@ -197,12 +205,11 @@ void DaliBusComponent::dump_config() {
 #define BIT_PERIOD 833
 
 void DaliBusComponent::writeBit(bool bit) {
-    // NOTE: output is inverted - HIGH will pull the bus to 0V (logic low)
-    bit = !bit;
-    m_txPin->digital_write(bit ? LOW : HIGH);
-    delayMicroseconds(HALF_BIT_PERIOD-6);
+    // Output is inverted: HIGH pulls the bus to 0V.
     m_txPin->digital_write(bit ? HIGH : LOW);
-    delayMicroseconds(HALF_BIT_PERIOD-6);
+    delayMicroseconds(HALF_BIT_PERIOD - 6);
+    m_txPin->digital_write(bit ? LOW : HIGH);
+    delayMicroseconds(HALF_BIT_PERIOD - 6);
 }
 
 void DaliBusComponent::writeByte(uint8_t b) {
@@ -255,13 +262,11 @@ uint8_t DaliBusComponent::receiveBackwardFrame(unsigned long timeout_ms) {
     uint8_t data;
 
     unsigned long startTime = millis();
-    uint32_t startMicros = micros();
 
     // Wait for START bit (timing critical)
-    // TODO: Need a better way to wait for this that doens't block the CPU
+    // TODO: Need a better way to wait for this that doesn't block the CPU
     while (m_rxPin->digital_read() == LOW) {
         if (millis() - startTime >= timeout_ms) {
-            //Serial.println("No reply");
             if (DEBUG_LOG_RXTX) {
                 DALI_LOGD("RX: 00 (NACK)");
             }
@@ -279,7 +284,6 @@ uint8_t DaliBusComponent::receiveBackwardFrame(unsigned long timeout_ms) {
         delayMicroseconds(BIT_PERIOD*2); // Wait for STOP bits
     }
 
-    //Serial.print("RX: "); Serial.println(data, HEX);
     if (DEBUG_LOG_RXTX) {
         DALI_LOGD("RX: %02x", data);
     }
