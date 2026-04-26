@@ -136,7 +136,10 @@ There are other ways to implement the current limiter too, as long as they have 
 I succsessfully used an opamp current limiting circuit as I didn't have an LM317 or BJT on hand. 
 It has been noted elsewhere that if using a LM317, it MUST be an on-brand chip, and preferably the `LM317DCYR` from Texas Instruments.
 
-I will later be releasing a Kicad project for a DALI bus adapter board that more closely follows the spec.
+## Alternate Wiring
+
+If you have a low-voltage DALI adapter and just want to wire 1:1 (no multi-bus architecture), you can actually bypass
+all of the wiring requirements and connect RX->TX & TX->RX, using 3.3V logic levels, and the protocol will still work.
 
 ## Hardware Adapters
 
