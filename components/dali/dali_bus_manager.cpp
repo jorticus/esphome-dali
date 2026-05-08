@@ -124,9 +124,9 @@ bool DaliBusManager::findNextAddress(short_addr_t& out_short_addr, uint32_t& out
         return false;
     }
 
-    // Remove this device from the search
-    withdraw(addr);
-
+    // NOTE: The caller is responsible for calling withdrawCurrentDevice() after any address programming,
+    // per the DALI spec order: binary search → PROGRAM_SHORT_ADDRESS → WITHDRAW.
+    _current_addr = addr;
     out_long_addr = addr;
 
     // Get short address
@@ -151,6 +151,10 @@ void DaliBusManager::endAddressScan() {
         // Devices will respond to regular commands again
         terminate();
     }
+}
+
+void DaliBusManager::withdrawCurrentDevice() {
+    withdraw(_current_addr);
 }
 
 void DaliMaster::dumpStatusForDevice(uint8_t addr) {

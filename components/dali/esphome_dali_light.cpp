@@ -12,6 +12,22 @@ static const char *const TAG = "dali.light";
 
 #define DALI_MAX_BRIGHTNESS_F (254.0f)
 
+// File-static instance pointer for the set_initial_state trampoline.
+// Safe because ESPHome setup is single-threaded: each LightState::setup()
+// calls setup_state() then invokes the callback in the same frame.
+static DaliLight* s_setup_instance = nullptr;
+
+void DaliLight::initial_state_trampoline(LightStateRTCState &s) {
+    if (s_setup_instance) {
+        if (s_setup_instance->initial_has_brightness_) {
+            s.brightness = s_setup_instance->initial_brightness_;
+        }
+        if (s_setup_instance->initial_has_color_temp_) {
+            s.color_temp = s_setup_instance->initial_color_temp_;
+        }
+    }
+}
+
 void dali::DaliLight::setup_state(light::LightState *state) {
     // Initialization code for DaliLight
 
@@ -77,12 +93,12 @@ void dali::DaliLight::setup_state(light::LightState *state) {
 
             // Query the actual brightness level of the device and 
             // ensure this is reflected in the ESPHome component itself...
-            LightStateRTCState lstate;
             uint8_t current_level = bus->dali.lamp.getCurrentLevel(address_);
             if (current_level != 0) {
                 // TODO: Do we need to take into account reported min/max brightness?
-                lstate.brightness = (current_level * (1.0f/255.0f));
-                ESP_LOGD(TAG, "Restore brightness level: %.2f", lstate.brightness);
+                initial_brightness_ = (current_level * (1.0f/255.0f));
+                initial_has_brightness_ = true;
+                ESP_LOGD(TAG, "Restore brightness level: %.2f", initial_brightness_);
             }
 
             if (tc_supported_) {
@@ -90,12 +106,14 @@ void dali::DaliLight::setup_state(light::LightState *state) {
                 if (current_temperature != 0) {
                     float mired = (float)current_temperature;
                     // Need to convert mireds to 0..1 range
-                    lstate.color_temp = (current_temperature - dali_tc_coolest_) / (dali_tc_warmest_ - dali_tc_coolest_);
-                    ESP_LOGD(TAG, "Restore colour temperature: %.2f", lstate.color_temp);
+                    initial_color_temp_ = (current_temperature - dali_tc_coolest_) / (dali_tc_warmest_ - dali_tc_coolest_);
+                    initial_has_color_temp_ = true;
+                    ESP_LOGD(TAG, "Restore colour temperature: %.2f", initial_color_temp_);
                 }
             }
 
-            state->set_initial_state(lstate);
+            s_setup_instance = this;
+            state->set_initial_state(initial_state_trampoline);
         }
         else {
             ESP_LOGW(TAG, "DALI device at addr %.2x not found!", address_);

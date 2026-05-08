@@ -93,8 +93,6 @@ void DaliBusComponent::setup() {
                     if (m_initialize_addresses == DaliInitMode::DiscoverOnly) {
                         DALI_LOGW("  WARNING: Duplicate short address detected!");
                         duplicate_detected = true;
-                        // TODO: Maybe don't register the component in this case?
-                        // Brightness control will work, but reported capabilities will not be correct.
                     }
                     else {
                         // Assign a new address for this
@@ -103,6 +101,7 @@ void DaliBusComponent::setup() {
 
                         if (!dali.bus_manager.programShortAddress(short_addr)) {
                             DALI_LOGE("  Could not program short address");
+                            dali.bus_manager.withdrawCurrentDevice();
                             short_addr = 0xFF;
                             continue;
                         }
@@ -111,6 +110,9 @@ void DaliBusComponent::setup() {
                 else {
                     is_discovered[short_addr] = true;
                 }
+
+                // Withdraw after address is confirmed (spec order: find → program → withdraw)
+                dali.bus_manager.withdrawCurrentDevice();
 
                 // Dynamic component creation (if not defined in YAML)
                 if (m_addresses[short_addr]) {
@@ -124,20 +126,23 @@ void DaliBusComponent::setup() {
             else if (short_addr == 0xFF) {
                 if (m_initialize_addresses == DaliInitMode::DiscoverOnly) {
                     DALI_LOGI("  Device %.6x @ --", long_addr);
-                    // You'll need to assign a short address before the device will respond to commands.
-                    // However it will still respond to BROADCAST brightness updates...
                     DALI_LOGW("  No short address assigned!");
+                    dali.bus_manager.withdrawCurrentDevice();
                     continue;
                 }
                 else {
-                    short_addr = 1;
+                    short_addr = count;
                     DALI_LOGI("  Assigning short address: %.2x", short_addr);
 
                     if (!dali.bus_manager.programShortAddress(short_addr)) {
                         DALI_LOGE("  Could not program short address");
+                        dali.bus_manager.withdrawCurrentDevice();
                         short_addr = 0xFF;
                         continue;
                     }
+
+                    // Withdraw after successful address programming
+                    dali.bus_manager.withdrawCurrentDevice();
 
                     DALI_LOGI("  Device %.6x @ %.2x", long_addr, short_addr);
                 }
@@ -152,6 +157,11 @@ void DaliBusComponent::setup() {
             DALI_LOGW("  Devices may report inconsistent capabilities.");
             DALI_LOGW("  You should fix your address assignments.");
         }
+    }
+
+    // If no dynamic lights were discovered, disable loop() to avoid unnecessary CPU cycles.
+    if (m_dynamic_lights.empty()) {
+        this->disable_loop();
     }
 }
 
@@ -168,7 +178,8 @@ void DaliBusComponent::create_light_component(short_addr_t short_addr, uint32_t 
     // NOTE: Not freeing these strings, they will be owned by LightState.
 
     auto* light_state = new DynamicDaliLightState { dali_light };
-    light_state->set_component_source(LOG_STR("light"));
+    // set_component_source is codegen-only since ESPHome 2026.4 (uint8_t index into PROGMEM table);
+    // dynamic components cannot participate, and it was cosmetic (log source tagging) only.
     light_state->configure_dynamic_entity(name, id, false);
     App.register_light(light_state);
     static_cast<AppRegistrationAccessor&>(App).register_component_(light_state);
@@ -182,6 +193,9 @@ void DaliBusComponent::create_light_component(short_addr_t short_addr, uint32_t 
 
     // Track for manual loop() driving — dynamic lights are not in ESPHome's
     // compile-time looping_components_ list so their loop() won't be called automatically.
+    if (m_dynamic_lights.empty()) {
+        this->enable_loop();  // only enable loop when we have lights to drive
+    }
     m_dynamic_lights.push_back(light_state);
 
     DALI_LOGI("Created light component '%s' (%s)", name, id);
@@ -197,7 +211,22 @@ void DaliBusComponent::loop() {
 }
 
 void DaliBusComponent::dump_config() {
-
+    static const char *const TAG = "dali";
+    ESP_LOGCONFIG(TAG, "DALI Bus:");
+    LOG_PIN("  TX Pin: ", m_txPin);
+    LOG_PIN("  RX Pin: ", m_rxPin);
+    ESP_LOGCONFIG(TAG, "  Discovery: %s", m_discovery ? "enabled" : "disabled");
+    ESP_LOGCONFIG(TAG, "  Control Gear: %s", dali.bus_manager.isControlGearPresent() ? "present" : "not present");
+    bool any = false;
+    for (int i = 0; i <= ADDR_SHORT_MAX; i++) {
+        if (m_addresses[i] > 0) {
+            if (!any) {
+                ESP_LOGCONFIG(TAG, "  Addresses:");
+                any = true;
+            }
+            ESP_LOGCONFIG(TAG, "    %.2u = %.6x", i, m_addresses[i]);
+        }
+    }
 }
 
 #define QUARTER_BIT_PERIOD 208

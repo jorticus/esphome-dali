@@ -375,15 +375,6 @@ DaliBusManager(DaliPort& port)
         return (port.receiveBackwardFrame(timeout_ms) == 0xFF);
     }
 
-    /// @brief Tell the device matching the address in SEARCH[H,M,L] to ignore the COMPARE command from now on.
-    void withdraw(uint32_t address) {
-        port.sendSpecialCommand(DaliSpecialCommand::SEARCH_ADDRH, (address >> 16) & 0xFF); // Set SEARCHH
-        port.sendSpecialCommand(DaliSpecialCommand::SEARCH_ADDRM, (address >> 8) & 0xFF);  // Set SEARCHM
-        port.sendSpecialCommand(DaliSpecialCommand::SEARCH_ADDRL, address & 0xFF);         // Set SEARCHL
-        
-        port.sendSpecialCommand(DaliSpecialCommand::WITHDRAW, 0);
-    }
-
     /// @brief Exit the initialization mode.
     void terminate() {
         port.sendSpecialCommand(DaliSpecialCommand::TERMINATE, 0);
@@ -411,6 +402,7 @@ DaliBusManager(DaliPort& port)
 
     void startAddressScan();
     bool findNextAddress(short_addr_t& short_addr, uint32_t& long_addr);
+    void withdrawCurrentDevice();
     void endAddressScan();
 
     bool isControlGearPresent(short_addr_t addr = ADDR_BROADCAST) {
@@ -430,8 +422,17 @@ DaliBusManager(DaliPort& port)
     }
 
 private:
+    /// @brief Tell the device matching the address in SEARCH[H,M,L] to ignore COMPARE from now on.
+    void withdraw(uint32_t address) {
+        port.sendSpecialCommand(DaliSpecialCommand::SEARCH_ADDRH, (address >> 16) & 0xFF);
+        port.sendSpecialCommand(DaliSpecialCommand::SEARCH_ADDRM, (address >> 8) & 0xFF);
+        port.sendSpecialCommand(DaliSpecialCommand::SEARCH_ADDRL, address & 0xFF);
+        port.sendSpecialCommand(DaliSpecialCommand::WITHDRAW, 0);
+    }
+
     DaliPort& port;
     bool _is_scanning = false;
+    uint32_t _current_addr = 0;
 };
 
 class DaliLamp {

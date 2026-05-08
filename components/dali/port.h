@@ -27,4 +27,10 @@ static void exitCritical() {
 
 #define LOW (0)
 #define HIGH (1)
+#else
+// Arduino provides delayMicroseconds, millis, LOW, HIGH natively,
+// but not delayMilliseconds — shim it with delay().
+static void delayMilliseconds(uint32_t delay_ms) {
+    delay(delay_ms);
+}
 #endif

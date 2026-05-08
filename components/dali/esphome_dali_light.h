@@ -60,6 +60,10 @@ class DaliLight : public light::LightOutput, public Component {
     // NOTE: Must have a lower priority number than the DALI bus component
     float get_setup_priority() const override { return setup_priority::DATA; }
 
+    // Static trampoline for set_initial_state() callback (ESPHome 2026.4+).
+    // Uses s_setup_instance file-static pointer set just before the call.
+    static void initial_state_trampoline(light::LightStateRTCState &s);
+
  protected:
     DaliBusComponent *bus;
 
@@ -78,6 +82,13 @@ class DaliLight : public light::LightOutput, public Component {
     optional<DaliLedDimmingCurve> brightness_curve_;
 
     bool tc_supported_;
+
+    // Cached initial state from DALI device queries, used by the static
+    // trampoline passed to set_initial_state() (ESPHome 2026.4+ callback API).
+    float initial_brightness_{1.0f};
+    float initial_color_temp_{1.0f};
+    bool initial_has_brightness_{false};
+    bool initial_has_color_temp_{false};
     
 };
 
