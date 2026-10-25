@@ -4,8 +4,44 @@
 #include "esphome/components/light/light_output.h"
 #include "esphome_dali.h"
 
+#include <type_traits>
+
 namespace esphome {
 namespace dali {
+
+namespace compat {
+// ESPHome 2026.10+ has LightState::set_state_callback(void(LightStateRTCState&, bool restored)).
+// Older versions have set_initial_state(void(LightStateRTCState&)) and set_restore_mode().
+template<typename T>
+auto set_state_callback_impl(T *state, void (*cb)(light::LightStateRTCState &, bool), int)
+    -> decltype(state->set_state_callback(cb), void()) {
+    state->set_state_callback(cb);
+}
+
+// Enumerator 0 of the restore mode enum is DEFAULT_OFF; deduced so no name is looked up on new ESPHome.
+template<typename T, typename R>
+void set_restore_default_off(T *state, void (T::*)(R)) {
+    state->set_restore_mode(static_cast<R>(0));
+}
+
+template<typename T>
+void set_state_callback_impl(T *state, void (*cb)(light::LightStateRTCState &, bool), long) {
+    static void (*s_cb)(light::LightStateRTCState &, bool) = nullptr;
+    s_cb = cb;
+    set_restore_default_off(state, &T::set_restore_mode);
+    state->set_initial_state([](light::LightStateRTCState &s) {
+        // Without a saved state the color mode is UNKNOWN
+        bool restored = s.color_mode != light::ColorMode::UNKNOWN;
+        s_cb(s, restored);
+    });
+}
+
+// Only one callback is supported on old ESPHome (static storage); it is shared by all lights,
+// so the callback must be the same function for every light.
+inline void set_state_callback(light::LightState *state, void (*cb)(light::LightStateRTCState &, bool)) {
+    set_state_callback_impl(state, cb, 0);
+}
+}  // namespace compat
 
 enum class DaliColorMode {
     AUTO,
@@ -60,9 +96,8 @@ class DaliLight : public light::LightOutput, public Component {
     // NOTE: Must have a lower priority number than the DALI bus component
     float get_setup_priority() const override { return setup_priority::DATA; }
 
-    // Static trampoline for set_initial_state() callback (ESPHome 2026.4+).
-    // Uses s_setup_instance file-static pointer set just before the call.
-    static void initial_state_trampoline(light::LightStateRTCState &s);
+    // Applies the state read from the device to the initial light state (called from per-address trampolines).
+    static void apply_initial_state(DaliLight *self, light::LightStateRTCState &s, bool restored);
 
  protected:
     DaliBusComponent *bus;
@@ -89,6 +124,9 @@ class DaliLight : public light::LightOutput, public Component {
     float initial_color_temp_{1.0f};
     bool initial_has_brightness_{false};
     bool initial_has_color_temp_{false};
+    bool initial_on_{false};
+    bool initial_has_state_{false};
+    bool setup_done_{false};
     
 };
 

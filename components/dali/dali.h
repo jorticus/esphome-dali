@@ -230,20 +230,32 @@ class DaliPort {
 public:
     virtual void sendForwardFrame(uint8_t address, uint8_t data) = 0;
     virtual uint8_t receiveBackwardFrame(unsigned long timeout_ms = 100);
+    virtual uint8_t transactForwardFrame(uint8_t address, uint8_t data, unsigned long timeout_ms = 100) {
+        sendForwardFrame(address, data);
+        return receiveBackwardFrame(timeout_ms);
+    }
 
 public:
     virtual void resetBus() { }
+
+    /// @brief True if the last transaction saw any backward frame, even a corrupted one (e.g. collision)
+    virtual bool lastReplyReceived() const { return false; }
 
     /// @brief Send a query command to the DALI bus and return the response
     /// @param address Device address, group address, or broadcast
     /// @param command Command byte
     /// @return Response byte (0xFF: success, 0x00: failure, or other byte)
     uint8_t sendQueryCommand(short_addr_t addr, DaliCommand command) {
-        sendForwardFrame(
+        return transactForwardFrame(
             (addr << 1) | DALI_COMMAND, 
             static_cast<uint8_t>(command));
+    }
 
-        return receiveBackwardFrame();
+    uint8_t sendSpecialQueryCommand(DaliSpecialCommand command, uint8_t data, unsigned long timeout_ms = 100) {
+        return transactForwardFrame(
+            static_cast<uint8_t>(command),
+            data,
+            timeout_ms);
     }
 
     /// @brief Send a control command to the DALI bus
@@ -280,10 +292,9 @@ public:
             DaliSpecialCommand::ENABLE_DEVICE_TYPE,
             static_cast<uint8_t>(device_type));
 
-        sendForwardFrame(
+        return transactForwardFrame(
             (addr << 1) | DALI_COMMAND, 
             static_cast<uint8_t>(extended_command));
-        return receiveBackwardFrame();
     };
 
     uint8_t sendExtendedQuery(short_addr_t addr, DaliLedCommand led_command) {
@@ -369,10 +380,10 @@ DaliBusManager(DaliPort& port)
         port.sendSpecialCommand(DaliSpecialCommand::SEARCH_ADDRM, (search_address >> 8) & 0xFF);  // Set SEARCHM
         port.sendSpecialCommand(DaliSpecialCommand::SEARCH_ADDRL, search_address & 0xFF);         // Set SEARCHL
 
-        port.sendSpecialCommand(DaliSpecialCommand::COMPARE, 0);
-
         const unsigned long timeout_ms = 10;
-        return (port.receiveBackwardFrame(timeout_ms) == 0xFF);
+        // Several devices answering at once corrupt the frame, so any reply counts as "yes".
+        const uint8_t reply = port.sendSpecialQueryCommand(DaliSpecialCommand::COMPARE, 0, timeout_ms);
+        return reply != 0 || port.lastReplyReceived();
     }
 
     /// @brief Exit the initialization mode.
@@ -385,8 +396,7 @@ DaliBusManager(DaliPort& port)
         addr = ((addr & 0x3F) << 1) | DALI_COMMAND;
         port.sendSpecialCommand(DaliSpecialCommand::PROGRAM_SHORT_ADDRESS, addr);
 
-        port.sendSpecialCommand(DaliSpecialCommand::VERIFY_SHORT_ADDRESS, addr);
-        return (port.receiveBackwardFrame() == 0xFF);
+        return (port.sendSpecialQueryCommand(DaliSpecialCommand::VERIFY_SHORT_ADDRESS, addr) == 0xFF);
     }
 
     void clearShortAddress() {

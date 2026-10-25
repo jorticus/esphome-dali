@@ -30,7 +30,7 @@ external_components:
 Lights can be automatically discovered on the bus by simply defining a dali bus component:
 
 ```yaml
-# bit-banged 1200 baud DALI bus
+# 1200 baud DALI bus using the ESP32 RMT peripheral (requires the esp-idf framework)
 dali:
   id: dali_bus
   tx_pin: 4
@@ -80,16 +80,20 @@ light:
 
 ### dali
 
-The main dali copmonent implements the low level bus interface via bit-bang protocol.
-
-The dali bus implements a simple bit-banged protocol, but you can extend it with a better implementation
-for your platform (eg, DMA, interrupt based).
+The main dali component implements the low level bus interface using the ESP32 RMT peripheral,
+via the [esp-idf-dali](https://github.com/ferdinandkeil/esp-idf-dali) driver. It requires the `esp-idf` framework.
 
 ```yaml
 dali:
   tx_pin: <transmit pin>
   rx_pin: <receive pin>
+  invert_tx: false  # optional, invert the TX output level (default: false)
+  invert_rx: true   # optional, invert the RX input level (default: true)
 ```
+
+Set `invert_tx`/`invert_rx` to match your bus interface hardware.
+
+NOTE: The bus reset pulse is not available with the RMT transport.
 
 ### dali.light
 

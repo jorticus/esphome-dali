@@ -1,4 +1,6 @@
 
+#include <array>
+#include <utility>
 #include <esphome.h>
 #include "esphome_dali_light.h"
 #include "esphome/core/log.h"
@@ -12,23 +14,56 @@ static const char *const TAG = "dali.light";
 
 #define DALI_MAX_BRIGHTNESS_F (254.0f)
 
-// File-static instance pointer for the set_initial_state trampoline.
-// Safe because ESPHome setup is single-threaded: each LightState::setup()
-// calls setup_state() then invokes the callback in the same frame.
-static DaliLight* s_setup_instance = nullptr;
+// The state callback has no context argument, so each short address gets its own trampoline.
+// Discovered lights are all created before any LightState::setup() runs, so a single shared
+// instance pointer would apply the last light's state to every light.
+static DaliLight* s_instances[ADDR_SHORT_MAX + 1] = {nullptr};
 
-void DaliLight::initial_state_trampoline(LightStateRTCState &s) {
-    if (s_setup_instance) {
-        if (s_setup_instance->initial_has_brightness_) {
-            s.brightness = s_setup_instance->initial_brightness_;
+void DaliLight::apply_initial_state(DaliLight *self, LightStateRTCState &s, bool restored) {
+    ESP_LOGD(TAG, "apply_initial_state self=%p addr=%d known=%d on=%d restored=%d", (void *) self,
+             self ? self->address_ : -1, self ? self->initial_has_state_ : -1, self ? self->initial_on_ : -1, restored);
+    if (self && self->initial_has_state_) {
+        // The device's actual level is the source of truth for on/off
+        s.state = self->initial_on_;
+    } else if (!restored) {
+        s.state = false;  // state could not be read from the device: default off
+    }
+    if (self) {
+        if (!restored) {
+            // Without a saved state the color mode is UNKNOWN, and ESPHome would then drop the brightness below.
+            // Pick the first supported mode so the restored brightness is applied.
+            for (auto mode : self->get_traits().get_supported_color_modes()) {
+                s.color_mode = mode;
+                break;
+            }
         }
-        if (s_setup_instance->initial_has_color_temp_) {
-            s.color_temp = s_setup_instance->initial_color_temp_;
+        if (self->initial_has_brightness_) {
+            s.brightness = self->initial_brightness_;
+        }
+        if (self->initial_has_color_temp_) {
+            s.color_temp = self->initial_color_temp_;
         }
     }
 }
 
+template<size_t N>
+static void initial_state_trampoline_n(LightStateRTCState &s, bool restored) {
+    DaliLight::apply_initial_state(s_instances[N], s, restored);
+}
+
+template<size_t... I>
+static constexpr std::array<void (*)(LightStateRTCState &, bool), sizeof...(I)>
+make_trampolines(std::index_sequence<I...>) {
+    return {{&initial_state_trampoline_n<I>...}};
+}
+
+static constexpr auto s_trampolines = make_trampolines(std::make_index_sequence<ADDR_SHORT_MAX + 1>{});
+
 void dali::DaliLight::setup_state(light::LightState *state) {
+    if (setup_done_) {
+        return;
+    }
+    setup_done_ = true;
     // Initialization code for DaliLight
 
     // Exclude broadcast and group addresses
@@ -93,10 +128,40 @@ void dali::DaliLight::setup_state(light::LightState *state) {
 
             // Query the actual brightness level of the device and 
             // ensure this is reflected in the ESPHome component itself...
-            uint8_t current_level = bus->dali.lamp.getCurrentLevel(address_);
-            if (current_level != 0) {
+            // The query helpers return 0 for both "level 0" and "no reply", so check for a reply explicitly,
+            // and cross-check a level of 0 against the status byte (lamp-on bit) to catch bad reads.
+            uint8_t current_level = 0;
+            bool level_valid = false;
+            for (int attempt = 0; attempt < 3 && !level_valid; attempt++) {
+                current_level = bus->dali.lamp.getCurrentLevel(address_);
+                if (!bus->lastReplyReceived()) {
+                    ESP_LOGW(TAG, "DALI[%.2x] no reply to level query (attempt %d)", address_, attempt + 1);
+                    continue;
+                }
+                const uint8_t status = bus->sendQueryCommand(address_, DaliCommand::QUERY_STATUS);
+                const bool status_valid = bus->lastReplyReceived();
+                ESP_LOGD(TAG, "DALI[%.2x] level=%d status=0x%02x%s", address_, current_level, status,
+                         status_valid ? "" : " (no reply)");
+                if (current_level == 0 && status_valid && (status & STATUS_LAMP_ON)) {
+                    ESP_LOGW(TAG, "DALI[%.2x] reports level 0 but lamp is on, retrying (attempt %d)", address_, attempt + 1);
+                    continue;
+                }
+                level_valid = true;
+            }
+
+            if (!level_valid) {
+                ESP_LOGW(TAG, "DALI[%.2x] could not read a reliable level, leaving state untouched", address_);
+                current_level = 0;
+            }
+            initial_on_ = current_level != 0;
+            initial_has_state_ = level_valid;
+            if (level_valid) {
+                ESP_LOGD(TAG, "Restore state: %s", initial_on_ ? "ON" : "OFF");
+            }
+            if (level_valid && current_level != 0) {
                 // TODO: Do we need to take into account reported min/max brightness?
-                initial_brightness_ = (current_level * (1.0f/255.0f));
+                // write_state() receives gamma-corrected brightness, so undo that to get the same level back
+                initial_brightness_ = state->gamma_uncorrect_lut(current_level * (1.0f/255.0f));
                 initial_has_brightness_ = true;
                 ESP_LOGD(TAG, "Restore brightness level: %.2f", initial_brightness_);
             }
@@ -112,8 +177,8 @@ void dali::DaliLight::setup_state(light::LightState *state) {
                 }
             }
 
-            s_setup_instance = this;
-            state->set_initial_state(initial_state_trampoline);
+            s_instances[address_] = this;
+            compat::set_state_callback(state, s_trampolines[address_]);
         }
         else {
             ESP_LOGW(TAG, "DALI device at addr %.2x not found!", address_);

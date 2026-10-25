@@ -48,8 +48,9 @@ uint8_t DaliBusManager::autoAssignShortAddresses(uint8_t assign, bool reset) {
 
         // Verify short address if we have one to verify
         if (verify_short != 0xFF) {
-            port.sendSpecialCommand(DaliSpecialCommand::VERIFY_SHORT_ADDRESS, verify_short | DALI_COMMAND);
-            if (port.receiveBackwardFrame() == 0xFF) {
+            if (port.sendSpecialQueryCommand(
+                    DaliSpecialCommand::VERIFY_SHORT_ADDRESS,
+                    verify_short | DALI_COMMAND) == 0xFF) {
                 DALI_LOGD("Short address verified: %.2x", verify_short);
             } else {
                 DALI_LOGE("Short address verification failed for 0x%.6x", found_long);
@@ -109,9 +110,7 @@ bool DaliBusManager::findNextAddress(short_addr_t& out_short_addr, uint32_t& out
         }
     }
 
-    if (addr == 0xFFFFFF || addr == 0x000000) {
-        return false; // No more devices found
-    }
+    // 0x000000 and 0xFFFFFF are valid random addresses; the compare checks below confirm a device is present.
 
     // Final step in the search, set last bit if no longer matching
     if (!compareSearchAddress(addr)) {
@@ -130,8 +129,7 @@ bool DaliBusManager::findNextAddress(short_addr_t& out_short_addr, uint32_t& out
     out_long_addr = addr;
 
     // Get short address
-    port.sendSpecialCommand(DaliSpecialCommand::QUERY_SHORT_ADDRESS, 0);
-    out_short_addr = port.receiveBackwardFrame();
+    out_short_addr = port.sendSpecialQueryCommand(DaliSpecialCommand::QUERY_SHORT_ADDRESS, 0);
     if (out_short_addr == 0) {
         DALI_LOGW("Short address not found for %.6x", addr);
         out_short_addr = 0xFF;
